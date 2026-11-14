@@ -7,7 +7,7 @@ import base64
 import functools
 import inspect
 import logging
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, cast
 import jsonrpc_base
 import jsonrpc_async
 import jsonrpc_websocket
@@ -222,6 +222,10 @@ class KodiWSConnection(KodiConnection):
         # Incremented by close(), so a lost connection can tell it was closed
         self._close_count = 0
         self._connect_lock: Optional[asyncio.Lock] = None
+        # The handshake of the running connect(), so close() can stop it
+        self._handshake: Optional[
+            "asyncio.Task[Callable[[asyncio.Task[None]], None]]"
+        ] = None
 
     @property
     def connected(self):
@@ -305,33 +309,68 @@ class KodiWSConnection(KodiConnection):
     async def connect(self):
         """Connect to kodi over websocket.
 
-        Concurrent calls open a single connection.
+        Concurrent calls open a single connection. If close() is called while
+        connect() is running and the connection is not open yet, connect()
+        raises CannotConnectError and leaves no connection open.
         """
+        close_count = self._close_count
         # Created here, so that it belongs to the running event loop
         if self._connect_lock is None:
             self._connect_lock = asyncio.Lock()
         async with self._connect_lock:
+            if close_count != self._close_count:
+                raise CannotConnectError("Closed while connecting")
             if self.connected:
                 return
             previous = self._ws_task
             if previous is not None:
                 # Abort a read loop that is still closing an earlier connection
                 previous.cancel()
+            handshake = asyncio.ensure_future(self._ws_connect())
+            self._handshake = handshake
             try:
-                await asyncio.wait_for(self._ws_connect(), self._timeout)
-            except (jsonrpc_base.jsonrpc.TransportError, asyncio.TimeoutError) as error:
+                await asyncio.wait([handshake], timeout=self._timeout)
+            except asyncio.CancelledError:
+                if not handshake.done():
+                    handshake.cancel()
+                    await asyncio.wait([handshake])
+                if not handshake.cancelled() and handshake.exception() is None:
+                    # The connection opened right before the cancellation, so
+                    # close it. If its read loop already ended, the loss is
+                    # still reported.
+                    task = cast("asyncio.Task[None]", self._ws_task)
+                    task.remove_done_callback(handshake.result())
+                    task.add_done_callback(_ws_loop_done)
+                    await self._close_websocket_bounded(task)
+                raise
+            finally:
+                self._handshake = None
+            if not handshake.done():
+                handshake.cancel()
+                await asyncio.wait([handshake])
+                if not handshake.cancelled():
+                    # Retrieve an error the handshake ended with meanwhile
+                    handshake.exception()
+                raise CannotConnectError from asyncio.TimeoutError()
+            if handshake.cancelled():
+                raise CannotConnectError("Closed while connecting")
+            try:
+                handshake.result()
+            except jsonrpc_base.jsonrpc.TransportError as error:
                 raise CannotConnectError from error
 
-    async def _ws_connect(self) -> None:
-        """Open the websocket and keep its read loop task."""
+    async def _ws_connect(self) -> Callable[["asyncio.Task[None]"], None]:
+        """Open the websocket and keep its read loop task.
+
+        Returns the callback that reports a lost connection.
+        """
         close_count = self._close_count
         task = await self._ws_server.ws_connect()
         # Store the read loop before anything else can run, so close() sees it
         self._ws_task = task
-        if self.connected:
-            # A close() during the handshake does not stop this connection
-            close_count = self._close_count
-        task.add_done_callback(functools.partial(self._loop_done, close_count))
+        callback = functools.partial(self._loop_done, close_count)
+        task.add_done_callback(callback)
+        return callback
 
     def _loop_done(self, close_count: int, task: "asyncio.Task[None]") -> None:
         """Call the disconnect callbacks if the connection was lost."""
@@ -363,17 +402,30 @@ class KodiWSConnection(KodiConnection):
         """Close the connection.
 
         Waits at most ``timeout`` seconds for the connection to close, then
-        aborts it. With ``timeout=None`` it waits indefinitely.
+        aborts it. With ``timeout=None`` it waits indefinitely. A running
+        connect() that has not opened the connection yet is stopped as well.
         """
         self._close_count += 1
-        task = self._ws_task
+        handshake = self._handshake
+        # Once connected, the handshake is only finishing (for example when a
+        # notification callback calls close()), and the websocket of the new
+        # connection is closed below
+        if handshake is not None and not self.connected:
+            handshake.cancel()
+            await asyncio.wait([handshake], timeout=self._timeout)
+        await self._close_websocket_bounded(self._ws_task)
+        await super().close()
+
+    async def _close_websocket_bounded(
+        self, task: Optional["asyncio.Task[None]"]
+    ) -> None:
+        """Close the websocket, and abort it after the timeout."""
         try:
             await asyncio.wait_for(self._close_websocket(task), self._timeout)
         except asyncio.TimeoutError:
             if task is not None:
                 task.cancel()
                 await asyncio.wait([task])
-        await super().close()
 
     async def _close_websocket(self, task: Optional["asyncio.Task[None]"]) -> None:
         """Close the websocket and wait for its read loop to end."""
