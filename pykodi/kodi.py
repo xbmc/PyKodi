@@ -675,7 +675,7 @@ class Kodi:
                 **{"playerid": players[0]["playerid"], "shuffle": shuffle}
             )
 
-    async def call_method(self, method: str, **kwargs: Any) -> Any:
+    async def call_method(self, method: str, /, **kwargs: Any) -> Any:
         """Run Kodi JSONRPC API method with params."""
         if "." not in method or len(method.split(".")) != 2:
             raise ValueError(f"Invalid method: {method}")
