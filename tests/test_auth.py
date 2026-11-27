@@ -315,7 +315,8 @@ def test_http_unusable_reply(
 ) -> None:
     with pytest.raises(CannotConnectError) as error:
         ping_with_raw_reply(reply, keep_open, request_timeout)
-    assert isinstance(error.value.__cause__, wrapped)
+    assert isinstance(error.value.__cause__, TransportError)
+    assert isinstance(error.value.__cause__.args[1], wrapped)
 
 
 def test_http_protocol_error_passes_through() -> None:
