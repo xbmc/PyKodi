@@ -1,6 +1,7 @@
 """Tests for the disconnect callback and concurrent connects."""
 
 import asyncio
+import base64
 import gc
 import logging
 import sys
@@ -12,7 +13,7 @@ from aiohttp import web
 import jsonrpc_base
 import pytest
 
-from pykodi import CannotConnectError, get_kodi_connection
+from pykodi import CannotConnectError, Kodi, get_kodi_connection
 
 Handler = Callable[[web.WebSocketResponse], Awaitable[None]]
 
@@ -510,3 +511,30 @@ def test_concurrent_connect_opens_one_connection() -> None:
     asyncio.run(run())
 
     assert opened == [1]
+
+
+def test_ping_on_a_lost_connection() -> None:
+    async def run() -> None:
+        runner = await start_kodi([close_now])
+        port = runner.addresses[0][1]
+        try:
+            async with aiohttp.ClientSession() as session:
+                connection = get_kodi_connection(
+                    "127.0.0.1", 8080, port, "kodi", "secret", session=session
+                )
+                await connection.connect()
+                await wait_until(lambda: not connection.connected)
+                with pytest.raises(CannotConnectError) as error:
+                    await Kodi(connection).ping()
+                await connection.close()
+        finally:
+            await runner.cleanup()
+        assert (
+            str(error.value)
+            == "Error calling method 'JSONRPC.Ping': Client is not connected."
+        )
+        assert isinstance(error.value.__cause__, jsonrpc_base.TransportError)
+        for login in ("secret", base64.b64encode(b"kodi:secret").decode("ascii")):
+            assert login not in repr(error.value)
+
+    asyncio.run(run())
