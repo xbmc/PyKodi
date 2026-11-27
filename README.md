@@ -60,7 +60,7 @@ info = await kodi.get_stream_info(players[0])
 info["currentvideostream"]                  # {"codec": "hevc", "width": 3840, "height": 2160, ...}
 info["infolabels"]["VideoPlayer.HdrType"]   # "dolbyvision", "hdr10", "hlg" or "" ("hdr10plus" from Kodi 22)
 info["infolabels"]["System.ScreenResolution"]
-info["hdrhints"]                            # ["dolbyvision", "hdr10"], taken from the file name
+info["hdrhints"]                            # ["dolbyvision", "hdr10"], taken from the file and folder name
 ```
 
-The info labels are returned as Kodi reports them. Labels that the running Kodi version does not know are empty strings. `hdrhints` lists the HDR formats named in the file name, because Kodi 21 reports HDR10+ as `hdr10` and does not report the HDR10 base layer of a Dolby Vision stream.
+The info labels are returned as Kodi reports them. Labels that the running Kodi version does not know are empty strings. `hdrhints` lists the HDR formats named in the file name or in the name of the folder that holds the file (not for plugin sources), because Kodi 21 reports HDR10+ as `hdr10` and does not report the HDR10 base layer of a Dolby Vision stream.

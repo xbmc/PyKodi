@@ -57,6 +57,7 @@ LABELS = {
     "System.ScreenWidth": "1920",
     "System.ScreenHeight": "1080",
     "Player.Filename": "Movietitle.2160p.BluRay.REMUX.DoVi.HDR10.HEVC.mkv",
+    "Player.Folderpath": "/storage/movies/Movietitle (2023)/",
 }
 
 
@@ -158,5 +159,43 @@ def test_no_video_stream() -> None:
 )
 def test_hdr_hints(filename: str, hints: List[str]) -> None:
     info = stream_info(PROPERTIES, {"Player.Filename": filename})
+
+    assert info["hdrhints"] == hints
+
+
+@pytest.mark.parametrize(
+    ("filename", "folderpath", "hints"),
+    [
+        (
+            "Movietitle.mkv",
+            "/storage/movies/Movietitle.2160p.DV.HDR10/",
+            ["dolbyvision", "hdr10"],
+        ),
+        ("Movietitle.mkv", "/storage/movies/Movietitle.2160p.DV", ["dolbyvision"]),
+        (
+            "Movietitle.2160p.HDR10+.mkv",
+            "/storage/Movietitle.2160p.DV/",
+            ["dolbyvision", "hdr10plus"],
+        ),
+        (
+            "Movietitle.DV.HDR10.mkv",
+            "/storage/Movietitle.DV.HDR10/",
+            ["dolbyvision", "hdr10"],
+        ),
+        ("Movietitle.mkv", "smb://nas/HDR10/Movietitle (2023)/", []),
+        ("Movietitle.mkv", "D:\\HDR10\\Movietitle (2023)\\", []),
+        ("Movietitle.mkv", "/storage/DV/", ["dolbyvision"]),
+        ("Movietitle.mkv", "D:\\Movies\\Movietitle.2160p.HLG\\", ["hlg"]),
+        ("", "plugin://plugin.video.example/HDR10/", []),
+        ("Movietitle.mkv", "", []),
+        ("Movietitle.mkv", "/", []),
+    ],
+)
+def test_hdr_hints_from_folder(
+    filename: str, folderpath: str, hints: List[str]
+) -> None:
+    labels = {"Player.Filename": filename, "Player.Folderpath": folderpath}
+
+    info = stream_info(PROPERTIES, labels)
 
     assert info["hdrhints"] == hints
