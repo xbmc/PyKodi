@@ -127,6 +127,21 @@ def _transport_error_text(error: jsonrpc_base.jsonrpc.TransportError) -> str:
     return text
 
 
+def is_error_response(error: jsonrpc_base.jsonrpc.ProtocolError) -> bool:
+    """Return whether Kodi answered the request with a JSON-RPC error object."""
+    return len(error.args) == 3
+
+
+def is_unauthorized(error: jsonrpc_base.jsonrpc.TransportError) -> bool:
+    """Return whether the web server rejected the request with HTTP 401."""
+    # jsonrpc_async reports a non-200 reply as "...: HTTP <status> <reason>",
+    # unless raise_for_status makes aiohttp raise the 401 itself
+    wrapped = error.args[1] if len(error.args) > 1 else None
+    return str(error.args[0]).partition(": ")[2].startswith("HTTP 401 ") or (
+        isinstance(wrapped, aiohttp.ClientResponseError) and wrapped.status == 401
+    )
+
+
 class KodiConnection:
     """A connection to Kodi interface."""
 
@@ -518,13 +533,7 @@ class Kodi:
             response = await self._server.JSONRPC.Ping()
             return cast(bool, response == "pong")
         except jsonrpc_base.jsonrpc.TransportError as error:
-            # jsonrpc_async reports a non-200 reply as "...: HTTP <status> <reason>",
-            # unless raise_for_status makes aiohttp raise the 401 itself
-            wrapped = error.args[1] if len(error.args) > 1 else None
-            if str(error.args[0]).partition(": ")[2].startswith("HTTP 401 ") or (
-                isinstance(wrapped, aiohttp.ClientResponseError)
-                and wrapped.status == 401
-            ):
+            if is_unauthorized(error):
                 raise InvalidAuthError from error
             else:
                 raise CannotConnectError(_transport_error_text(error)) from error
