@@ -1,0 +1,5 @@
+# The lowest versions that setup.py and the jsonrpc libraries allow
+aiohttp==3.10.8
+jsonrpc-async==2.2.0
+jsonrpc-base==2.1.0
+jsonrpc-websocket==4.0.0
