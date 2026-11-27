@@ -31,6 +31,7 @@ _STREAM_INFO_LABELS = [
     "System.ScreenWidth",
     "System.ScreenHeight",
     "Player.Filename",
+    "Player.Folderpath",
 ]
 
 # Cover art embedded in a container shows up as a video stream with these codecs.
@@ -50,15 +51,23 @@ _HDR_HINTS = tuple(
 )
 
 
-def _hdr_hints(filename: Optional[str]) -> List[str]:
-    """Return the HDR formats named in a file name.
+def _hdr_hints(filename: Optional[str], folderpath: Optional[str]) -> List[str]:
+    """Return the HDR formats named in a file name or in its folder name.
 
     Kodi 21 reports HDR10+ as hdr10 and does not report the HDR10 base layer
     of a Dolby Vision stream, but release names usually contain both. The
-    extension is ignored, so a raw DV camera file (.dv) gives no hint.
+    extension is ignored, so a raw DV camera file (.dv) gives no hint. Only
+    the folder that holds the file counts, and none for a plugin source.
     """
     name = os.path.splitext(filename or "")[0]
-    return [hint for hint, pattern in _HDR_HINTS if pattern.search(name)]
+    folder = ""
+    if folderpath and not folderpath.startswith("plugin://"):
+        folder = re.split(r"[\\/]", folderpath.rstrip("\\/"))[-1]
+    return [
+        hint
+        for hint, pattern in _HDR_HINTS
+        if pattern.search(name) or pattern.search(folder)
+    ]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -536,9 +545,10 @@ class Kodi:
 
         Returns the stream properties of the player, the raw HDR, resolution
         and display info labels under "infolabels" and the HDR formats named
-        in the file name under "hdrhints". Info labels unknown to the Kodi
-        version are returned as empty strings. Embedded cover art is left out
-        of "videostreams" unless it is the current video stream.
+        in the file name or its folder name under "hdrhints". Info labels
+        unknown to the Kodi version are returned as empty strings. Embedded
+        cover art is left out of "videostreams" unless it is the current
+        video stream.
         """
         info, labels = await asyncio.gather(
             self.get_player_properties(player, _STREAM_INFO_PROPERTIES),
@@ -552,7 +562,9 @@ class Kodi:
             or stream.get("index") == current.get("index")
         ]
         info["infolabels"] = labels
-        info["hdrhints"] = _hdr_hints(labels.get("Player.Filename"))
+        info["hdrhints"] = _hdr_hints(
+            labels.get("Player.Filename"), labels.get("Player.Folderpath")
+        )
         return cast(Dict[str, Any], info)
 
     async def volume_up(self) -> None:
