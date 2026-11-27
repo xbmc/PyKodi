@@ -506,9 +506,6 @@ class Kodi:
                 raise InvalidAuthError from error
             else:
                 raise CannotConnectError from error
-        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-            # jsonrpc_async wraps only a ValueError from reading the reply body
-            raise CannotConnectError from error
 
     async def get_application_properties(self, properties: List[str]) -> Dict[str, Any]:
         """Get value of given properties."""
