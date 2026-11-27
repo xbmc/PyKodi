@@ -10,7 +10,9 @@ from aiohttp import web
 from pykodi import Kodi, get_kodi_connection
 
 
-def set_shuffle(players: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any]]]:
+def set_shuffle(
+    players: List[Dict[str, Any]], shuffle: bool = True
+) -> Tuple[bool, List[Dict[str, Any]]]:
     calls: List[Dict[str, Any]] = []
 
     async def run() -> bool:
@@ -42,7 +44,7 @@ def set_shuffle(players: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any
                 )
                 await connection.connect()
                 try:
-                    return await Kodi(connection).set_shuffle(True)
+                    return await Kodi(connection).set_shuffle(shuffle)
                 finally:
                     await connection.close()
         finally:
@@ -52,12 +54,13 @@ def set_shuffle(players: List[Dict[str, Any]]) -> Tuple[bool, List[Dict[str, Any
 
 
 def test_shuffle_is_sent_to_the_first_player() -> None:
-    result, calls = set_shuffle([{"playerid": 2, "type": "audio"}])
+    result, calls = set_shuffle([{"playerid": 2, "type": "audio"}], False)
     assert result is True
-    assert [(call["method"], call.get("params")) for call in calls] == [
-        ("Player.GetActivePlayers", None),
-        ("Player.SetShuffle", {"playerid": 2, "shuffle": True}),
+    assert [call["method"] for call in calls] == [
+        "Player.GetActivePlayers",
+        "Player.SetShuffle",
     ]
+    assert calls[1]["params"] == {"playerid": 2, "shuffle": False}
 
 
 def test_no_request_without_active_player() -> None:
