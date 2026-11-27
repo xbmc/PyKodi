@@ -51,6 +51,19 @@ remove = kc.on_disconnect(on_disconnect)
 remove()
 ```
 
+### Errors
+
+```python
+from pykodi import ProtocolError, TransportError, is_error_response, is_unauthorized
+
+try:
+    players = await kodi.get_players()
+except ProtocolError as error:
+    is_error_response(error)  # True if Kodi answered with a JSON-RPC error object
+except TransportError as error:
+    is_unauthorized(error)    # True if the web server rejected the login (HTTP 401)
+```
+
 ### Stream and HDR details
 
 ```python
