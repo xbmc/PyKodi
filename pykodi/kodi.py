@@ -667,13 +667,18 @@ class Kodi:
         """Play the given file."""
         await self.play_item({"file": file})
 
-    async def set_shuffle(self, shuffle: Union[bool, str]) -> None:
-        """Set shuffle mode, for the first player."""
+    async def set_shuffle(self, shuffle: Union[bool, str]) -> bool:
+        """Set shuffle mode, for the first player.
+
+        Return False without a request when no player is active.
+        """
         players = await self.get_players()
-        if players:
-            await self._server.Player.SetShuffle(
-                **{"playerid": players[0]["playerid"], "shuffle": shuffle}
-            )
+        if not players:
+            return False
+        await self._server.Player.SetShuffle(
+            **{"playerid": players[0]["playerid"], "shuffle": shuffle}
+        )
+        return True
 
     async def call_method(self, method: str, /, **kwargs: Any) -> Any:
         """Run Kodi JSONRPC API method with params."""
