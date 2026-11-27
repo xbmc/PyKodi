@@ -1,6 +1,7 @@
 """Tests for connecting over websocket."""
 
 import asyncio
+import base64
 import gc
 import inspect
 import logging
@@ -69,14 +70,21 @@ async def cancel_when_handshake_ends(
     handshake.add_done_callback(lambda _: connecting.cancel())
 
 
-def test_connect_times_out() -> None:
+@pytest.mark.parametrize("timeout", [0.1, 0.2])
+def test_connect_times_out(timeout: float) -> None:
     async def run() -> None:
         server = await start_silent_server()
         port = server.sockets[0].getsockname()[1]
         try:
             async with aiohttp.ClientSession() as session:
                 connection = get_kodi_connection(
-                    "127.0.0.1", 8080, port, None, None, timeout=0.2, session=session
+                    "127.0.0.1",
+                    8080,
+                    port,
+                    None,
+                    None,
+                    timeout=timeout,
+                    session=session,
                 )
                 ended: List[bool] = []
 
@@ -93,6 +101,7 @@ def test_connect_times_out() -> None:
                 with pytest.raises(CannotConnectError) as error:
                     await asyncio.wait_for(connecting, 5)
                 assert asyncio.get_running_loop().time() - start < 2
+                assert str(error.value) == f"Timed out after {timeout} s"
                 assert isinstance(error.value.__cause__, asyncio.TimeoutError)
                 assert not connection.connected
                 assert ended == [True]
@@ -116,8 +125,71 @@ def test_connect_refused() -> None:
             )
             with pytest.raises(CannotConnectError) as error:
                 await asyncio.wait_for(connection.connect(), 5)
+            assert str(error.value).startswith(
+                "Error connecting to server: Cannot connect to host 127.0.0.1:"
+            )
             assert isinstance(error.value.__cause__, TransportError)
             assert not connection.connected
+
+    asyncio.run(run())
+
+
+def test_rejected_handshake_does_not_show_login() -> None:
+    async def run() -> None:
+        async def jsonrpc(request: web.Request) -> web.Response:
+            return web.Response(status=500)
+
+        app = web.Application()
+        app.router.add_get("/jsonrpc", jsonrpc)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "127.0.0.1", 0).start()
+        port = runner.addresses[0][1]
+        logins = ("secret", base64.b64encode(b"kodi:secret").decode("ascii"))
+        try:
+            async with aiohttp.ClientSession() as session:
+                connection = get_kodi_connection(
+                    "127.0.0.1",
+                    8080,
+                    port,
+                    "kodi",
+                    "secret",
+                    timeout=5,
+                    session=session,
+                )
+                with pytest.raises(CannotConnectError) as error:
+                    await asyncio.wait_for(connection.connect(), 5)
+        finally:
+            await runner.cleanup()
+        assert str(error.value).startswith(
+            "Error connecting to server: 500, message='Invalid response status'"
+        )
+        assert logins[1] in str(error.value.__cause__)
+        for login in logins:
+            assert login not in str(error.value)
+            assert login not in repr(error.value)
+
+    asyncio.run(run())
+
+
+def test_aiohttp_timeout_while_connecting() -> None:
+    async def run() -> None:
+        server = await start_silent_server()
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=0.1)
+            ) as session:
+                connection = get_kodi_connection(
+                    "127.0.0.1", 8080, port, None, None, timeout=5, session=session
+                )
+                with pytest.raises(CannotConnectError) as error:
+                    await asyncio.wait_for(connection.connect(), 5)
+        finally:
+            server.close()
+            await server.wait_closed()
+        assert str(error.value) == "Error connecting to server: TimeoutError"
+        assert isinstance(error.value.__cause__, TransportError)
 
     asyncio.run(run())
 

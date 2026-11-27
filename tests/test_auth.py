@@ -5,7 +5,8 @@ import base64
 import errno
 import re
 import socket
-from typing import Any, Dict, List, Optional, Type
+from http import HTTPStatus
+from typing import Any, Callable, Dict, List, Optional, Type
 from unittest.mock import MagicMock
 import warnings
 
@@ -190,6 +191,13 @@ def ping_with_status(
     asyncio.run(run())
 
 
+def assert_no_login(error: pytest.ExceptionInfo[Exception]) -> None:
+    """Assert that the error does not show the login of ping()."""
+    for login in ("secret", basic("kodi:secret").removeprefix("Basic ")):
+        assert login not in str(error.value)
+        assert login not in repr(error.value)
+
+
 def assert_status(
     error: pytest.ExceptionInfo[Exception], status: int, raise_for_status: bool
 ) -> None:
@@ -214,11 +222,24 @@ def test_http_rejected_credentials(
 
 
 @pytest.mark.parametrize("status", [403, 407, 500])
-@pytest.mark.parametrize("raise_for_status", [False, True])
-def test_http_error_status(status: int, raise_for_status: bool) -> None:
+@pytest.mark.parametrize(
+    ("raise_for_status", "detail"),
+    [
+        (False, lambda status, cause: f"HTTP {status} {HTTPStatus(status).phrase}"),
+        (True, lambda status, cause: f"Transport Error: {cause.args[1]}"),
+    ],
+    ids=["status_line", "raise_for_status"],
+)
+def test_http_error_status(
+    status: int, raise_for_status: bool, detail: Callable[[int, Any], str]
+) -> None:
     with pytest.raises(CannotConnectError) as error:
         ping_with_status(status, raise_for_status=raise_for_status)
     assert_status(error, status, raise_for_status)
+    assert str(error.value) == "Error calling method 'JSONRPC.Ping': " + detail(
+        status, error.value.__cause__
+    )
+    assert_no_login(error)
 
 
 def test_http_server_error_with_401_in_reason() -> None:
@@ -284,7 +305,7 @@ def ping_with_raw_reply(reply: bytes, keep_open: bool, request_timeout: float) -
 
 
 @pytest.mark.parametrize(
-    ("reply", "keep_open", "request_timeout", "wrapped"),
+    ("reply", "keep_open", "request_timeout", "wrapped", "text"),
     [
         (
             b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
@@ -292,6 +313,7 @@ def ping_with_raw_reply(reply: bytes, keep_open: bool, request_timeout: float) -
             False,
             5,
             aiohttp.ContentTypeError,
+            "Cannot deserialize response body: 200, message='Attempt to decode JSON",
         ),
         (
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -299,6 +321,7 @@ def ping_with_raw_reply(reply: bytes, keep_open: bool, request_timeout: float) -
             False,
             5,
             aiohttp.ClientPayloadError,
+            "Transport Error: Response payload is not completed",
         ),
         (
             b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -306,17 +329,24 @@ def ping_with_raw_reply(reply: bytes, keep_open: bool, request_timeout: float) -
             True,
             2,
             asyncio.TimeoutError,
+            "Transport Error: TimeoutError",
         ),
     ],
     ids=["html", "cut_off", "stalled"],
 )
 def test_http_unusable_reply(
-    reply: bytes, keep_open: bool, request_timeout: float, wrapped: Type[Exception]
+    reply: bytes,
+    keep_open: bool,
+    request_timeout: float,
+    wrapped: Type[Exception],
+    text: str,
 ) -> None:
     with pytest.raises(CannotConnectError) as error:
         ping_with_raw_reply(reply, keep_open, request_timeout)
     assert isinstance(error.value.__cause__, TransportError)
     assert isinstance(error.value.__cause__.args[1], wrapped)
+    assert str(error.value).startswith(f"Error calling method 'JSONRPC.Ping': {text}")
+    assert_no_login(error)
 
 
 def test_http_protocol_error_passes_through() -> None:

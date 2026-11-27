@@ -116,6 +116,17 @@ def _basic_auth_header(username: str, password: str) -> str:
     return "Basic " + base64.b64encode(credentials).decode("ascii")
 
 
+def _transport_error_text(error: jsonrpc_base.jsonrpc.TransportError) -> str:
+    """Return the text of a transport error and of the error it wraps."""
+    # str() of the whole error shows the repr of the wrapped aiohttp error,
+    # which can hold the request headers with the login
+    text = str(error.args[0])
+    cause = error.args[-1]
+    if isinstance(cause, BaseException):
+        text += f": {str(cause) or type(cause).__name__}"
+    return text
+
+
 class KodiConnection:
     """A connection to Kodi interface."""
 
@@ -394,13 +405,15 @@ class KodiWSConnection(KodiConnection):
                 if not handshake.cancelled():
                     # Retrieve an error the handshake ended with meanwhile
                     handshake.exception()
-                raise CannotConnectError from asyncio.TimeoutError()
+                raise CannotConnectError(
+                    f"Timed out after {self._timeout} s"
+                ) from asyncio.TimeoutError()
             if handshake.cancelled():
                 raise CannotConnectError("Closed while connecting")
             try:
                 handshake.result()
             except jsonrpc_base.jsonrpc.TransportError as error:
-                raise CannotConnectError from error
+                raise CannotConnectError(_transport_error_text(error)) from error
 
     async def _ws_connect(self) -> Callable[["asyncio.Task[None]"], None]:
         """Open the websocket and keep its read loop task.
@@ -514,7 +527,7 @@ class Kodi:
             ):
                 raise InvalidAuthError from error
             else:
-                raise CannotConnectError from error
+                raise CannotConnectError(_transport_error_text(error)) from error
 
     async def get_application_properties(self, properties: List[str]) -> Dict[str, Any]:
         """Get value of given properties."""
